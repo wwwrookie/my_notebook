@@ -750,3 +750,550 @@ sequenceDiagram
     end
 ```
 - **结果错误**：最终 `counter` 可能远小于 200,000。
+
+
+
+
+
+# 详解线程间通信
+在 Python 多线程编程中，线程间通信是实现协同工作的核心需求。由于线程共享同一进程的内存空间，通信方式主要围绕**共享数据的安全传递**和**线程执行顺序的协调**。以下是线程间通信的详细方法及示例：
+
+---
+
+### 一、共享变量（需配合锁）
+**场景**：多个线程需要读写同一变量。
+```python
+import threading
+
+# 共享变量 + 锁保护
+shared_data = 0
+lock = threading.Lock()
+
+def update_data():
+    global shared_data
+    for _ in range(100000):
+        with lock:  # 必须加锁
+            shared_data += 1
+
+t1 = threading.Thread(target=update_data)
+t2 = threading.Thread(target=update_data)
+t1.start()
+t2.start()
+t1.join()
+t2.join()
+print(shared_data)  # 正确输出 200000
+```
+
+---
+
+### 二、队列（`queue.Queue`，线程安全）
+**场景**：生产者-消费者模型，安全传递数据。
+```python
+import threading
+import queue
+import time
+
+# 创建线程安全队列
+q = queue.Queue()
+
+def producer():
+    for i in range(5):
+        q.put(i)  # 生产者放入数据
+        print(f"生产: {i}")
+        time.sleep(0.1)
+
+def consumer():
+    while True:
+        item = q.get()
+        if item is None:  # 终止信号
+            break
+        print(f"消费: {item}")
+        q.task_done()  # 标记任务完成
+
+# 启动线程
+t_prod = threading.Thread(target=producer)
+t_cons = threading.Thread(target=consumer)
+t_prod.start()
+t_cons.start()
+
+t_prod.join()
+q.put(None)  # 发送终止信号
+t_cons.join()
+```
+
+---
+
+### 三、事件（`threading.Event`）
+**场景**：线程间状态通知（如启动/停止信号）。
+```python
+import threading
+
+# 创建事件对象
+event = threading.Event()
+
+def waiter():
+    print("等待事件触发...")
+    event.wait()  # 阻塞直到事件被设置
+    print("事件已触发，继续执行")
+
+def setter():
+    time.sleep(2)
+    print("设置事件")
+    event.set()  # 唤醒所有等待线程
+
+t1 = threading.Thread(target=waiter)
+t2 = threading.Thread(target=setter)
+t1.start()
+t2.start()
+t1.join()
+t2.join()
+```
+
+---
+
+### 四、条件变量（`threading.Condition`）
+**场景**：复杂协调（如资源可用性通知）。
+```python
+import threading
+
+# 共享资源 + 条件变量
+buffer = []
+MAX_ITEMS = 5
+condition = threading.Condition()
+
+def producer():
+    global buffer
+    for i in range(10):
+        with condition:
+            while len(buffer) >= MAX_ITEMS:  # 缓冲区满则等待
+                condition.wait()
+            buffer.append(i)
+            print(f"生产: {i}")
+            condition.notify_all()  # 通知消费者
+
+def consumer():
+    global buffer
+    while True:
+        with condition:
+            while len(buffer) == 0:  # 缓冲区空则等待
+                condition.wait()
+            item = buffer.pop(0)
+            print(f"消费: {item}")
+            condition.notify_all()  # 通知生产者
+
+t_prod = threading.Thread(target=producer)
+t_cons = threading.Thread(target=consumer)
+t_prod.start()
+t_cons.start()
+t_prod.join()
+t_cons.join()
+```
+
+---
+
+### 五、信号量（`threading.Semaphore`）
+**场景**：控制并发访问资源的线程数量。
+```python
+import threading
+
+# 允许最多3个线程同时访问
+semaphore = threading.Semaphore(3)
+
+def access_resource(thread_id):
+    with semaphore:
+        print(f"线程 {thread_id} 获得资源")
+        time.sleep(2)
+        print(f"线程 {thread_id} 释放资源")
+
+for i in range(5):
+    threading.Thread(target=access_resource, args=(i,)).start()
+```
+
+---
+
+### 六、线程安全容器
+Python 提供线程安全的数据结构：
+```python
+from queue import Queue, LifoQueue, PriorityQueue
+
+# 1. 先进先出队列
+q = Queue(maxsize=10)
+q.put(item)
+item = q.get()
+
+# 2. 后进先出队列
+lifo_q = LifoQueue()
+
+# 3. 优先级队列
+prio_q = PriorityQueue()
+prio_q.put((priority, data))
+```
+
+---
+
+### 七、通信方式对比
+| 方法                | 适用场景                        | 优点                    | 缺点                |
+|---------------------|-------------------------------|------------------------|---------------------|
+| **共享变量 + 锁**   | 简单数据共享                   | 直接高效                | 需手动管理锁        |
+| **队列 (Queue)**    | 生产者-消费者模型              | 线程安全，无需手动同步  | 可能引入额外延迟    |
+| **事件 (Event)**    | 单向状态通知（如启动/停止）    | 轻量级                  | 只能传递布尔状态    |
+| **条件变量 (Condition)** | 复杂协调（如缓冲区管理） | 支持多线程等待/通知     | 使用复杂度较高      |
+| **信号量 (Semaphore)** | 控制资源并发访问数量          | 灵活控制并发度          | 不解决数据传递问题  |
+
+---
+
+### 八、最佳实践
+1. **优先使用队列**：避免直接操作共享变量，降低死锁风险。
+2. **缩小锁范围**：只锁住必要的代码，减少线程阻塞时间。
+3. **避免嵌套锁**：按固定顺序获取锁，防止死锁。
+4. **善用 `with` 语句**：自动管理锁的获取和释放。
+5. **明确终止条件**：如使用 `None` 或特殊标记通知线程退出。
+
+---
+
+### 九、常见陷阱
+1. **数据竞争**：未加锁直接修改共享变量导致数据不一致。
+2. **死锁**：多个锁交叉请求导致线程永久阻塞。
+3. **活锁**：线程不断重试却无法前进（如持续释放并重新请求资源）。
+4. **资源泄漏**：忘记释放锁或队列任务未标记完成（`task_done()`）。
+
+掌握这些通信机制，可以高效且安全地实现多线程协作！
+
+
+# 线程间通信的时序图
+
+以下是使用 **Mermaid 语法** 绘制的多种线程间通信方式的时序图，涵盖队列、事件、条件变量等常见场景：
+
+---
+
+### 一、队列（Queue）通信时序图（生产者-消费者模型）
+```mermaid
+sequenceDiagram
+    participant 主线程 as Main
+    participant 生产者线程 as Producer
+    participant 队列 as Queue
+    participant 消费者线程 as Consumer
+
+    Main->>Producer: 启动
+    Main->>Consumer: 启动
+
+    loop 生产数据
+        Producer->>Queue: put(data)
+        activate Queue
+        Queue-->>Consumer: 数据到达（异步通知）
+        deactivate Queue
+    end
+
+    Producer->>Queue: put(None)  # 终止信号
+    Queue-->>Consumer: 传递 None
+
+    loop 消费数据
+        Consumer->>Queue: get()
+        activate Queue
+        Queue-->>Consumer: 返回数据
+        Consumer->>Consumer: 处理数据
+        Consumer->>Queue: task_done()
+        deactivate Queue
+    end
+
+    Main->>Queue: join()  # 等待队列空
+    Queue-->>Main: 完成确认
+    Main->>Producer: join()
+    Main->>Consumer: join()
+```
+
+**对应代码**：
+```python
+import threading
+import queue
+
+def producer(q):
+    for i in range(3):
+        q.put(i)
+    q.put(None)  # 终止信号
+
+def consumer(q):
+    while True:
+        item = q.get()
+        if item is None: break
+        print(f"消费: {item}")
+        q.task_done()
+
+q = queue.Queue()
+t_prod = threading.Thread(target=producer, args=(q,))
+t_cons = threading.Thread(target=consumer, args=(q,))
+t_prod.start()
+t_cons.start()
+q.join()
+```
+
+---
+
+### 二、事件（Event）通信时序图
+```mermaid
+sequenceDiagram
+    participant 主线程 as Main
+    participant 等待线程 as Waiter
+    participant 触发线程 as Setter
+
+    Main->>Waiter: 启动
+    Main->>Setter: 启动
+
+    Waiter->>Event: wait()  # 阻塞等待
+    activate Event
+
+    Setter->>Event: set()  # 触发事件
+    Event-->>Waiter: 唤醒
+    deactivate Event
+
+    Waiter->>Waiter: 执行后续操作
+```
+
+**对应代码**：
+```python
+import threading
+
+event = threading.Event()
+
+def waiter():
+    print("等待事件...")
+    event.wait()
+    print("事件触发，继续执行")
+
+def setter():
+    time.sleep(2)
+    event.set()
+
+t1 = threading.Thread(target=waiter)
+t2 = threading.Thread(target=setter)
+t1.start()
+t2.start()
+```
+
+---
+
+### 三、条件变量（Condition）通信时序图
+```mermaid
+sequenceDiagram
+    participant 生产者线程 as Producer
+    participant 条件变量 as Condition
+    participant 消费者线程 as Consumer
+
+    loop 生产数据
+        Producer->>Condition: acquire()
+        Condition->>Condition: 检查缓冲区是否满
+        alt 缓冲区未满
+            Producer->>Producer: 添加数据到缓冲区
+            Producer->>Condition: notify_all()  # 通知消费者
+        else 缓冲区满
+            Producer->>Condition: wait()  # 阻塞等待
+        end
+        Producer->>Condition: release()
+    end
+
+    loop 消费数据
+        Consumer->>Condition: acquire()
+        Condition->>Condition: 检查缓冲区是否空
+        alt 缓冲区未空
+            Consumer->>Consumer: 取出数据
+            Consumer->>Condition: notify_all()  # 通知生产者
+        else 缓冲区空
+            Consumer->>Condition: wait()  # 阻塞等待
+        end
+        Consumer->>Condition: release()
+    end
+```
+
+**对应代码**：
+```python
+import threading
+
+buffer = []
+MAX_SIZE = 5
+condition = threading.Condition()
+
+def producer():
+    for i in range(10):
+        with condition:
+            while len(buffer) >= MAX_SIZE:
+                condition.wait()
+            buffer.append(i)
+            condition.notify_all()
+
+def consumer():
+    while True:
+        with condition:
+            while len(buffer) == 0:
+                condition.wait()
+            item = buffer.pop(0)
+            condition.notify_all()
+```
+
+---
+
+### 四、通信方式对比时序特征
+| 通信方式       | 时序特点                                                                 |
+|----------------|------------------------------------------------------------------------|
+| **队列**       | 严格保证 FIFO 顺序，通过 `put()`/`get()` 显式传递数据                     |
+| **事件**       | 单向广播通知，通过 `wait()` 阻塞，`set()` 解除阻塞                        |
+| **条件变量**   | 双向协调，通过 `wait()`/`notify()` 实现精确唤醒，需配合锁使用            |
+| **共享变量+锁**| 通过锁强制串行化操作，时序上交替访问共享资源                             |
+
+---
+
+### 五、最佳实践建议
+1. **优先使用队列**：避免直接操作共享变量，减少死锁风险。
+2. **事件用于简单通知**：适合一次性状态触发（如启动/停止）。
+3. **条件变量处理复杂协调**：适用于缓冲区管理等需要双向通知的场景。
+4. **始终用 `with` 语句管理锁**：
+   ```python
+   with lock:  # 自动处理 acquire/release
+       shared_data += 1
+   ```
+
+通过时序图可以直观验证线程间的协作逻辑是否符合预期！
+
+## 队列（queue.Queue，线程安全） 详解
+
+---
+
+### 队列（`queue.Queue`，线程安全）详解
+
+`queue.Queue` 是 Python 标准库中提供的线程安全队列，专为多线程场景设计，遵循 **先进先出（FIFO）** 规则。其内部通过锁机制确保线程安全，适用于生产者-消费者模型等需要安全传递数据的场景。
+
+---
+
+#### 一、核心特性
+1. **线程安全**：所有操作（`put`、`get` 等）均内置锁，无需手动同步。
+2. **阻塞控制**：队列满或空时，可配置阻塞或非阻塞行为。
+3. **任务跟踪**：支持 `task_done()` 和 `join()`，用于跟踪任务完成状态。
+
+---
+
+#### 二、基本方法
+
+| 方法                     | 说明                                                                 |
+|--------------------------|--------------------------------------------------------------------|
+| **`put(item, block=True, timeout=None)`** | 向队列添加元素。若队列满：<br>- `block=True`：阻塞直到有空位；<br>- `block=False`：直接抛出 `queue.Full` 异常。|
+| **`get(block=True, timeout=None)`**       | 从队列取出元素。若队列空：<br>- `block=True`：阻塞直到有元素；<br>- `block=False`：直接抛出 `queue.Empty` 异常。|
+| **`task_done()`**         | 标记一个任务完成（需在 `get()` 后调用），与 `join()` 配合使用。      |
+| **`join()`**              | 阻塞直到队列中所有任务被处理（即 `put()` 次数等于 `task_done()` 次数）。|
+| **`empty()`**             | 返回队列是否为空（非线程安全，慎用）。                              |
+| **`full()`**              | 返回队列是否已满（非线程安全，慎用）。                              |
+| **`qsize()`**             | 返回队列近似大小（非线程安全，慎用）。                              |
+
+---
+
+#### 三、队列类型
+| 队列类型                  | 说明                                | 适用场景                |
+|--------------------------|-----------------------------------|------------------------|
+| **`Queue`**              | 标准先进先出（FIFO）队列            | 通用任务队列            |
+| **`LifoQueue`**          | 后进先出（LIFO，类似栈结构）队列     | 需要后进先出逻辑的场景   |
+| **`PriorityQueue`**      | 优先级队列（元素按优先级排序）       | 任务需要按优先级处理    |
+
+**示例：优先级队列**
+```python
+from queue import PriorityQueue
+
+pq = PriorityQueue()
+pq.put((3, "低优先级任务"))  # 元组格式：(优先级, 数据)
+pq.put((1, "高优先级任务"))
+pq.put((2, "中优先级任务"))
+
+while not pq.empty():
+    print(pq.get()[1])  # 输出顺序：高 → 中 → 低
+```
+
+---
+
+#### 四、使用场景：生产者-消费者模型
+```python
+import threading
+import queue
+import time
+
+# 创建队列，最大容量为5
+q = queue.Queue(maxsize=5)
+
+def producer():
+    for i in range(10):
+        try:
+            q.put(i, block=True, timeout=1)  # 阻塞1秒，若仍无法插入则抛异常
+            print(f"生产者插入: {i}")
+            time.sleep(0.5)
+        except queue.Full:
+            print("队列已满，无法插入")
+
+    q.put(None)  # 发送终止信号
+
+def consumer():
+    while True:
+        item = q.get()
+        if item is None:  # 收到终止信号
+            q.task_done()  # 处理终止信号的任务标记
+            break
+        print(f"消费者处理: {item}")
+        q.task_done()  # 标记任务完成
+
+# 启动线程
+t_prod = threading.Thread(target=producer)
+t_cons = threading.Thread(target=consumer)
+t_prod.start()
+t_cons.start()
+
+# 等待队列任务全部完成
+q.join()
+print("所有任务处理完毕")
+
+# 等待线程结束
+t_prod.join()
+t_cons.join()
+```
+
+---
+
+#### 五、注意事项
+1. **终止信号处理**：  
+   - 使用特殊标记（如 `None`）通知消费者线程退出。
+   - 确保所有生产者发送终止信号后消费者能正确退出。
+
+2. **避免死锁**：  
+   - 若未正确调用 `task_done()`，`join()` 会无限阻塞。
+   - 确保 `put()` 和 `task_done()` 的调用次数匹配。
+
+3. **队列容量控制**：  
+   - 设置合理的 `maxsize` 避免内存溢出（默认 `maxsize=0` 表示无限容量）。
+
+4. **非阻塞操作**：  
+   - 使用 `block=False` 或 `timeout` 避免线程永久阻塞。
+   ```python
+   try:
+       item = q.get(block=False)
+   except queue.Empty:
+       print("队列为空")
+   ```
+
+---
+
+#### 六、与多进程队列的区别
+| 特性                | `queue.Queue`（线程队列）          | `multiprocessing.Queue`（进程队列） |
+|---------------------|-----------------------------------|------------------------------------|
+| **适用场景**         | 同一进程内的多线程通信              | 跨进程通信                          |
+| **数据序列化**       | 不需要（共享内存）                  | 需要（通过序列化传输）               |
+| **性能**            | 更高（无序列化开销）                | 较低（序列化和进程间通信开销）        |
+| **底层实现**        | 基于锁和条件变量                    | 基于管道或共享内存                    |
+
+---
+
+### 总结
+`queue.Queue` 是 Python 多线程编程中安全传递数据的核心工具，通过锁机制和任务跟踪功能简化了线程间协作。合理使用队列类型（如 `PriorityQueue`）和方法（如 `join()`）可高效解决生产者-消费者问题，同时避免数据竞争和死锁。
+
+
+## 事件（`threading.Event`）详解
+
+## 条件变量（threading.Condition）
+
+## 信号量（threading.Semaphore）
+
+## 线程安全容器
+
