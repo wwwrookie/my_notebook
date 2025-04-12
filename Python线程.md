@@ -1659,6 +1659,363 @@ class ConnectionPool:
 
 
 ## 信号量（threading.Semaphore）
+以下是 **`threading.Semaphore`** 的详细解析，结合 **时序图** 和代码示例，帮助理解其如何通过计数器机制控制多线程对共享资源的并发访问。
+
+---
+
+### 一、`Semaphore` 的核心概念
+`Semaphore`（信号量）是一种同步原语，通过维护一个**计数器**来控制线程对共享资源的访问。其核心特点：
+- **计数器初始化**：例如 `Semaphore(3)` 表示最多允许 3 个线程同时访问资源。
+- **阻塞与唤醒**：当资源被占满（计数器为 0）时，新线程必须等待，直到其他线程释放资源（计数器增加）。
+
+**适用场景**：
+- 限制数据库连接池的并发连接数。
+- 控制文件写入的线程数量。
+- API 接口的限流保护。
+
+---
+
+### 二、`Semaphore` 的方法
+| 方法                     | 说明                                                                 |
+|--------------------------|--------------------------------------------------------------------|
+| **`acquire(blocking=True, timeout=None)`** | 获取信号量（计数器减 1）。若计数器为 0：<br>- `blocking=True`：阻塞直到其他线程释放；<br>- `blocking=False`：立即返回 `False`。 |
+| **`release()`**          | 释放信号量（计数器加 1），唤醒一个等待的线程。                        |
+
+---
+
+### 三、时序图（Mermaid 语法）
+```mermaid
+sequenceDiagram
+    participant 线程1 as Thread1
+    participant 线程2 as Thread2
+    participant 线程3 as Thread3
+    participant 信号量 as Semaphore(2)
+
+    # 初始化信号量计数器为2
+    Note over 信号量: 初始计数器=2
+
+    # 前两个线程成功获取信号量
+    Thread1->>信号量: acquire()
+    Note right of 信号量: 计数器=1
+    Thread2->>信号量: acquire()
+    Note right of 信号量: 计数器=0
+
+    # 第三个线程因计数器为0被阻塞
+    Thread3->>信号量: acquire() 阻塞
+    Note over Thread3: 等待...
+
+    # 线程1释放信号量，唤醒线程3
+    Thread1->>信号量: release()
+    Note right of 信号量: 计数器=1
+    信号量-->>Thread3: 唤醒，允许进入
+    Note right of 信号量: 计数器=0
+
+    # 线程2释放信号量
+    Thread2->>信号量: release()
+    Note right of 信号量: 计数器=1
+```
+
+---
+
+### 四、代码示例（限制并发线程数）
+```python
+import threading
+import time
+
+# 初始化信号量，允许最多2个线程同时运行
+semaphore = threading.Semaphore(2)
+
+def task(thread_id):
+    with semaphore:  # 自动获取和释放信号量
+        print(f"线程 {thread_id} 获得资源")
+        time.sleep(2)  # 模拟资源占用
+    print(f"线程 {thread_id} 释放资源")
+
+# 启动5个线程竞争资源
+threads = []
+for i in range(5):
+    t = threading.Thread(target=task, args=(i,))
+    threads.append(t)
+    t.start()
+
+# 等待所有线程完成
+for t in threads:
+    t.join()
+```
+
+**输出结果**：
+```
+线程 0 获得资源
+线程 1 获得资源
+线程 0 释放资源
+线程 1 释放资源
+线程 2 获得资源
+线程 3 获得资源
+线程 2 释放资源
+线程 3 释放资源
+线程 4 获得资源
+线程 4 释放资源
+```
+
+---
+
+### 五、关键机制详解
+#### 1. 计数器控制逻辑
+- **初始化**：`Semaphore(n)` 设置计数器初始值为 `n`。
+- **`acquire()`**：计数器减 1。若计数器 ≥ 0，线程继续执行；若 < 0，线程阻塞。
+- **`release()`**：计数器加 1，并唤醒一个等待线程。
+
+#### 2. 防止过度释放
+使用 `BoundedSemaphore` 避免计数器超过初始值：
+```python
+sem = threading.BoundedSemaphore(2)
+sem.release()  # 若计数器超过2，抛出 ValueError
+```
+
+#### 3. 非阻塞模式
+```python
+if sem.acquire(blocking=False):
+    print("成功获取信号量")
+else:
+    print("信号量已用尽")
+```
+
+---
+
+### 六、典型应用场景
+#### 场景 1：数据库连接池管理
+```python
+class ConnectionPool:
+    def __init__(self, max_connections):
+        self.semaphore = threading.BoundedSemaphore(max_connections)
+    
+    def get_connection(self):
+        self.semaphore.acquire()
+        return self._create_connection()  # 创建数据库连接
+    
+    def release_connection(self, conn):
+        self._close_connection(conn)     # 关闭数据库连接
+        self.semaphore.release()
+```
+
+#### 场景 2：文件写入限流
+```python
+sem = threading.Semaphore(3)  # 最多3个线程同时写入
+
+def write_data(data):
+    with sem:
+        with open("log.txt", "a") as f:
+            f.write(data + "\n")
+```
+
+---
+
+### 七、`Semaphore` vs `Lock` 对比
+| 特性                | `Semaphore`                   | `Lock`                       |
+|---------------------|-------------------------------|------------------------------|
+| **并发线程数**       | 可指定多个（如 `Semaphore(3)`） | 仅1个                        |
+| **释放限制**         | 可多次释放（需注意上限）       | 必须由获取者释放1次           |
+| **适用场景**        | 限制并发访问资源数量          | 严格互斥访问资源              |
+
+---
+
+### 八、注意事项
+1. **避免过度释放**：使用 `BoundedSemaphore` 防止计数器越界。
+2. **防止死锁**：确保每个 `acquire()` 都有对应的 `release()`。
+3. **性能优化**：合理设置初始值，避免频繁线程切换。
+
+---
+
+### 总结
+`threading.Semaphore` 是控制多线程并发访问资源的有效工具，通过计数器机制实现灵活的线程数量限制。结合 `with` 语句和 `BoundedSemaphore` 可避免常见错误，适用于连接池管理、API 限流等场景。
+
+
+
 
 ## 线程安全容器
+以下是关于 **线程安全容器** 的详细解析，结合 **时序图** 和代码示例，帮助理解其如何确保多线程环境下的数据安全。
+
+---
+
+### 一、线程安全容器的定义与作用
+**线程安全容器** 是指内部通过锁（`Lock`）或其他同步机制保证 **原子性操作** 的数据结构，允许多线程并发读写时不会导致数据竞争或状态不一致。  
+在 Python 中，常见的线程安全容器包括：
+- **`queue.Queue`**（先进先出队列）
+- **`queue.LifoQueue`**（后进先出队列）
+- **`queue.PriorityQueue`**（优先级队列）
+- **`collections.deque`**（双向队列，需配合锁使用）
+
+---
+
+### 二、线程安全 vs 非线程安全容器对比
+| 特性                | 线程安全容器（如 `Queue`）         | 非线程安全容器（如 `list`）      |
+|---------------------|----------------------------------|--------------------------------|
+| **数据竞争风险**     | 无（内部自动加锁）                | 有（需手动加锁）                |
+| **并发操作支持**     | 安全支持多线程读写                | 需显式同步（如 `Lock`）         |
+| **性能开销**        | 较高（锁机制引入开销）            | 较低（无锁）                   |
+| **适用场景**        | 高并发读写场景（如生产者-消费者）  | 单线程或低并发场景              |
+
+---
+
+### 三、`queue.Queue` 的线程安全机制
+#### 1. 核心方法
+| 方法                | 说明                                                                 |
+|---------------------|--------------------------------------------------------------------|
+| **`put(item)`**     | 向队列尾部添加元素，队列满时阻塞。                                   |
+| **`get()`**         | 从队列头部取出元素，队列空时阻塞。                                   |
+| **`task_done()`**   | 标记任务完成（需在 `get()` 后调用），与 `join()` 配合使用。          |
+| **`join()`**        | 阻塞直到队列中所有任务被处理（`put()` 次数等于 `task_done()` 次数）。 |
+
+#### 2. 内部实现原理
+- **锁机制**：`Queue` 使用 `threading.Lock` 保证 `put()` 和 `get()` 的原子性。
+- **条件变量**：通过 `threading.Condition` 实现队列空或满时的线程阻塞与唤醒。
+
+---
+
+### 四、时序图（生产者-消费者模型）
+```mermaid
+sequenceDiagram
+    participant 生产者 as Producer
+    participant 队列 as Queue
+    participant 消费者 as Consumer
+
+    loop 生产数据
+        Producer->>Queue: put(item)
+        activate Queue
+        Queue-->>Consumer: 数据到达通知
+        deactivate Queue
+    end
+
+    loop 消费数据
+        Consumer->>Queue: get()
+        activate Queue
+        Queue-->>Consumer: 返回数据
+        Consumer->>Queue: task_done()
+        deactivate Queue
+    end
+
+    Producer->>Queue: put(None)  # 终止信号
+    Consumer->>Queue: get() 直到收到 None
+```
+
+---
+
+### 五、代码示例（生产者-消费者模型）
+```python
+import threading
+import queue
+import time
+
+# 创建线程安全队列
+q = queue.Queue(maxsize=3)  # 最大容量为3
+
+def producer():
+    for i in range(5):
+        q.put(i)  # 队列满时自动阻塞
+        print(f"生产者写入: {i}")
+        time.sleep(0.1)
+    q.put(None)  # 发送终止信号
+
+def consumer():
+    while True:
+        item = q.get()
+        if item is None:
+            q.task_done()
+            break
+        print(f"消费者处理: {item}")
+        q.task_done()  # 标记任务完成
+        time.sleep(0.2)
+
+# 启动线程
+t_prod = threading.Thread(target=producer)
+t_cons = threading.Thread(target=consumer)
+t_prod.start()
+t_cons.start()
+
+# 等待队列任务全部完成
+q.join()
+print("所有任务处理完毕")
+
+# 等待线程结束
+t_prod.join()
+t_cons.join()
+```
+
+---
+
+### 六、非线程安全容器的风险示例
+```python
+import threading
+
+# 非线程安全的列表
+unsafe_list = []
+
+def append_data():
+    for _ in range(1000):
+        unsafe_list.append(1)  # 多线程并发追加元素可能导致数据丢失
+
+def remove_data():
+    for _ in range(1000):
+        if unsafe_list:
+            unsafe_list.pop()  # 可能引发 IndexError
+
+# 启动多个线程并发操作
+threads = []
+for _ in range(5):
+    t1 = threading.Thread(target=append_data)
+    t2 = threading.Thread(target=remove_data)
+    threads.extend([t1, t2])
+    t1.start()
+    t2.start()
+
+for t in threads:
+    t.join()
+
+print(f"最终列表长度: {len(unsafe_list)}")  # 结果可能不符合预期
+```
+
+**输出结果不确定性**：  
+由于竞态条件，最终列表长度可能不为 0，且可能抛出 `IndexError`。
+
+---
+
+### 七、如何手动实现线程安全容器
+通过锁包装普通容器：
+```python
+import threading
+
+class ThreadSafeList:
+    def __init__(self):
+        self._list = []
+        self._lock = threading.Lock()
+
+    def append(self, item):
+        with self._lock:
+            self._list.append(item)
+
+    def pop(self):
+        with self._lock:
+            return self._list.pop()
+
+    def __len__(self):
+        with self._lock:
+            return len(self._list)
+
+# 使用示例
+safe_list = ThreadSafeList()
+```
+
+---
+
+### 八、线程安全容器的最佳实践
+1. **优先使用内置容器**：如 `queue.Queue`，避免重复造轮子。
+2. **限制容器容量**：通过 `maxsize` 防止内存溢出。
+3. **明确终止条件**：如使用 `None` 或特殊标记通知消费者退出。
+4. **避免嵌套操作**：如 `q.put(q.get())` 需确保锁的粒度足够小。
+5. **性能敏感场景慎用**：锁机制可能成为瓶颈，考虑无锁数据结构或异步模型。
+
+---
+
+### 总结
+线程安全容器通过内部同步机制（如锁和条件变量）确保多线程并发操作的安全性，是生产者-消费者等并发模型的核心工具。在 Python 中，优先使用 `queue` 模块提供的队列，避免直接操作非线程安全容器（如 `list`、`dict`）。对于复杂需求，可通过锁手动封装安全容器，但需谨慎管理同步
 
