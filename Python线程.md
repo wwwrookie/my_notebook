@@ -648,10 +648,10 @@ counter = 0
 lock = threading.Lock()
 
 def increment():
-global counter
-for _ in range(100000):
-with lock:  # 自动获取和释放锁
-counter += 1
+    global counter
+    for _ in range(100000):
+        with lock:  # 自动获取和释放锁
+        counter += 1
 
 t1 = threading.Thread(target=increment)
 t2 = threading.Thread(target=increment)
