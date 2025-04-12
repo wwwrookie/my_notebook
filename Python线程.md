@@ -664,93 +664,89 @@ t2.join()
 打印(f"最终计数: {counter}")  # 正确结果为 200000
 
 ```
-以下是针对该代码的时序图（使用 PlantUML 语法），展示两个线程通过锁（Lock）安全地修改共享计数器 `counter` 的流程：
 
-```plantuml
-@startuml
-title 多线程锁机制时序图（counter +=1）
+以下是使用 **Mermaid 语法** 绘制的多线程锁机制时序图，展示两个线程 (`t1` 和 `t2`) 通过 `Lock` 安全递增共享计数器 `counter` 的流程：
 
-participant "主线程" as Main
-participant "线程t1" as T1
-participant "线程t2" as T2
-participant "锁Lock" as Lock
+```mermaid
+%% 多线程锁时序图（counter +=1）
+sequenceDiagram
+    participant 主线程 as MainThread
+    participant 线程t1 as Thread1
+    participant 线程t2 as Thread2
+    participant 锁 as Lock
 
-Main -> T1: 创建并启动
-Main -> T2: 创建并启动
-activate T1
-activate T2
+    MainThread->>Thread1: 创建并启动
+    MainThread->>Thread2: 创建并启动
 
-loop 100000 次
-    T1 -> Lock: acquire()
-    activate Lock
-    Lock --> T1: 允许进入
-    T1 -> T1: counter +=1
-    T1 -> Lock: release()
-    deactivate Lock
-end
+    activate Thread1
+    activate Thread2
 
-loop 100000 次
-    T2 -> Lock: acquire()
-    activate Lock
-    Lock --> T2: 允许进入（等待T1释放后）
-    T2 -> T2: counter +=1
-    T2 -> Lock: release()
-    deactivate Lock
-end
+    loop 100,000次循环
+        Thread1->>Lock: acquire()
+        activate Lock
+        Lock-->>Thread1: 允许进入
+        Thread1->>Thread1: counter +=1
+        Thread1->>Lock: release()
+        deactivate Lock
+    end
 
-Main -> T1: join()
-Main -> T2: join()
-deactivate T1
-deactivate T2
+    loop 100,000次循环
+        Thread2->>Lock: acquire()
+        activate Lock
+        Lock-->>Thread2: 允许进入（等待后）
+        Thread2->>Thread2: counter +=1
+        Thread2->>Lock: release()
+        deactivate Lock
+    end
 
-Main --> Main: print(counter=200000)
-@enduml
+    MainThread->>Thread1: join()
+    MainThread->>Thread2: join()
+    deactivate Thread1
+    deactivate Thread2
+
+    Note right of MainThread: 输出 counter=200000
 ```
 
 ---
 
-### 时序图关键点解析：
-1. **线程启动**  
-   - 主线程创建并启动 t1 和 t2
+### 关键元素说明：
+1. **线程创建**  
+   - 主线程 (`MainThread`) 创建并启动 `t1` 和 `t2`。
 
 2. **锁的竞争**  
-   - 每次循环中，线程必须通过 `acquire()` 获得锁才能操作 counter
-   - 当 t1 持有锁时，t2 的 `acquire()` 会阻塞（图中未显式画阻塞，但通过 Lock 的响应顺序体现）
+   - 每次循环中，线程必须调用 `acquire()` 获取锁后才能操作 `counter`。
+   - 若锁已被占用（如 `t1` 持有锁），另一个线程（`t2`）会阻塞等待，直到锁被释放。
 
 3. **原子操作**  
-   - 锁保护的代码块 `counter +=1` 在时序上表现为不可分割的单元
+   - `counter +=1` 在锁保护下成为原子操作（通过 `with lock` 自动管理锁的获取/释放）。
 
-4. **交替执行**  
-   - 由于 GIL 的存在，线程会交替执行，但锁保证了同一时刻只有一个线程操作 counter
+4. **线程结束**  
+   - 主线程通过 `join()` 等待子线程完成，最后输出正确结果。
 
 ---
 
-### 实际执行过程示意图（简化版）：
+### 可视化效果预览：
+1. 将上述代码粘贴到支持 Mermaid 的工具中（如 [Mermaid Live Editor](https://mermaid-js.github.io/mermaid-live-editor/)）。
+2. 渲染后的时序图会清晰展示：
+   - 锁的**互斥性**（同一时刻只有一个线程持有锁）。
+   - 线程间**交替执行**（因 GIL 存在，但锁强制串行化关键代码）。
+
+---
+
+### 对比无锁场景的时序差异：
+```mermaid
+%% 无锁情况（错误示例）
+sequenceDiagram
+    participant 线程t1 as Thread1
+    participant 线程t2 as Thread2
+
+    loop 100,000次
+        Thread1->>Thread1: 读取 counter=0
+        Thread2->>Thread2: 读取 counter=0
+        Thread1->>Thread1: 计算 0+1=1
+        Thread2->>Thread2: 计算 0+1=1
+        Thread1->>Thread1: 写入 counter=1
+        Thread2->>Thread2: 写入 counter=1
+    end
 ```
-时间轴 | 线程t1               | 线程t2
--------------------------------------------------
-  t0   | 获取锁               | 等待锁
-  t1   | counter +=1 → 1     | 阻塞
-  t2   | 释放锁               | 尝试获取锁
-  t3   |                     | 获取锁
-  t4   | 等待锁              | counter +=1 → 2
-  t5   |                     | 释放锁
-```
-
----
-
-### 代码与时序图的对应关系：
-| 代码行为               | 时序图表现                          |
-|-----------------------|-----------------------------------|
-| `with lock:`          | acquire() → 操作 → release() 流程 |
-| `counter +=1`         | 线程内部的 self 操作               |
-| `t1.start()`/`t2.start()` | 主线程激活 t1 和 t2               |
-| `join()`               | 主线程等待子线程结束               |
-
----
-
-### 可视化工具推荐：
-1. 复制上述 PlantUML 代码到在线渲染工具：[PlantUML 在线编辑器](https://www.plantuml.com/plantuml)
-2. 使用 VSCode 插件渲染（需安装 PlantUML 扩展）
-
-通过这个时序图可以清晰看到**锁如何强制串行化对共享资源的访问**，最终保证 counter 的正确性。
+- **结果错误**：最终 `counter` 可能远小于 200,000。
