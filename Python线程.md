@@ -2181,7 +2181,67 @@ with ThreadPoolExecutor() as executor:
 ### 十、总结
 线程池通过 **复用线程** 和 **集中管理任务**，显著提升了多线程编程的效率和可控性。Python 的 `ThreadPoolExecutor` 提供了简洁的 API，适用于处理 I/O 密集型任务。合理配置线程数、结合异步回调机制，可以最大化发挥其性能优势。
 
+# concurrent.futures模块
+`concurrent.futures` 模块是 Python 中用于简化并发编程的一个高级接口，它提供了线程池和进程池的实现，允许你以异步的方式执行任务。以下是该模块的详细说明和时序图制作思路。
 
+### 1. 模块概述
+`concurrent.futures` 模块主要包含以下两个类：
+- **ThreadPoolExecutor**：用于创建线程池，适合 I/O 密集型任务。
+- **ProcessPoolExecutor**：用于创建进程池，适合 CPU 密集型任务。
+
+### 2. 核心概念
+- **Executor**：执行器，负责调度任务的执行。
+- **Future**：表示异步计算的结果，可以通过它来查询任务的状态或获取结果。
+
+### 3. 主要方法
+- **submit(fn, *args, **kwargs)**：提交一个任务到执行器，返回一个 `Future` 对象。
+- **map(func, *iterables, timeout=None, chunksize=1)**：将函数应用到可迭代对象上，返回结果的迭代器。
+- **shutdown(wait=True)**：关闭执行器，释放资源。
+
+### 4. 使用示例
+```python
+from concurrent.futures import ThreadPoolExecutor
+import time
+
+def task(n):
+    time.sleep(n)
+    return f"Task {n} completed"
+
+with ThreadPoolExecutor(max_workers=2) as executor:
+    futures = [executor.submit(task, i) for i in range(1, 4)]
+    for future in futures:
+        print(future.result())
+```
+
+### 5. 时序图制作思路
+时序图可以帮助理解任务的调度和执行过程。以下是制作时序图的步骤：
+1. **创建执行器**：`ThreadPoolExecutor` 或 `ProcessPoolExecutor`。
+2. **提交任务**：使用 `submit` 方法提交任务，返回 `Future` 对象。
+3. **任务执行**：执行器调度任务，任务在后台线程或进程中执行。
+4. **获取结果**：通过 `Future` 对象的 `result` 方法获取任务结果。
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Executor
+    participant Future
+    participant Task
+
+    Client->>Executor: 创建执行器
+    Client->>Executor: 提交任务
+    Executor->>Future: 返回Future对象
+    Executor->>Task: 调度任务执行
+    Task-->>Executor: 任务完成
+    Executor-->>Future: 更新任务状态
+    Client->>Future: 获取任务结果
+    Future-->>Client: 返回结果
+```
+
+### 6. 注意事项
+- **资源管理**：使用 `with` 语句可以确保执行器在任务完成后正确关闭。
+- **异常处理**：在任务中抛出异常时，`Future` 对象的 `result` 方法会重新抛出该异常。
+
+通过以上内容，你应该能够理解 `concurrent.futures` 模块的基本用法，并能够制作相应的时序图来展示任务的调度和执行过程。
 
 # 第三方线程管理库
 以下是 Python 中常用的第三方线程管理库及其核心功能和适用场景的整理：
