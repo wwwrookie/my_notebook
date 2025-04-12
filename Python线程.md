@@ -513,3 +513,244 @@ print_threads()
 - **默认情况**：1 个主线程。
 - **线程数量可变**：根据代码和依赖库的行为动态变化。
 - **调试建议**：若发现意外线程，使用 `threading.enumerate()` 检查来源。
+
+# 构建一个多线程的时序图
+以下是基于 Python 多线程场景的**时序图（Sequence Diagram）**构建示例，以 `生产者-消费者模型` 为例，展示线程间的交互流程。使用 [PlantUML](https://plantuml.com/) 语法绘制，你可以用在线工具或 IDE 插件（如 VSCode 的 PlantUML 扩展）渲染成图像。
+
+---
+
+### 一、多线程时序图示例（生产者-消费者模型）
+```plantuml
+@startuml
+title 多线程时序图：生产者-消费者模型
+
+participant "主线程" as Main
+participant "生产者线程" as Producer
+participant "队列" as Queue
+participant "消费者线程" as Consumer
+
+Main -> Producer: 创建并启动
+Main -> Consumer: 创建并启动
+
+activate Producer
+activate Consumer
+
+Producer -> Queue: put(data)
+note right: 生产者向队列写入数据
+Queue --> Consumer: 数据到达
+Consumer -> Queue: get()
+Queue --> Consumer: 返回数据
+Consumer -> Consumer: 处理数据
+Consumer -> Queue: task_done()
+
+Main -> Queue: join()
+note left: 主线程等待队列任务完成
+Queue --> Main: 完成通知
+Main -> Producer: 终止信号
+Main -> Consumer: 终止信号
+
+deactivate Producer
+deactivate Consumer
+@enduml
+```
+
+---
+
+### 二、时序图关键元素解析
+| 元素                | 说明                                                                 |
+|---------------------|--------------------------------------------------------------------|
+| **participant**     | 定义参与对象（如线程、队列）                                           |
+| **->**              | 同步消息（阻塞操作，如 `put()` 等待队列空间）                           |
+| **-->**             | 异步消息（非阻塞操作，如数据到达的通知）                                 |
+| **activate**        | 激活线程（线程开始执行）                                               |
+| **deactivate**      | 线程结束                                                             |
+| **note**            | 添加注释说明                                                         |
+
+---
+
+### 三、对应 Python 代码实现
+```python
+import threading
+import queue
+import time
+
+def producer(q):
+    for i in range(3):
+        print(f"生产者写入数据: {i}")
+        q.put(i)
+        time.sleep(0.5)
+    q.put(None)  # 发送终止信号
+
+def consumer(q):
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        print(f"消费者处理数据: {item}")
+        q.task_done()
+
+q = queue.Queue()
+main_thread = threading.current_thread()
+
+# 创建并启动线程
+producer_thread = threading.Thread(target=producer, args=(q,))
+consumer_thread = threading.Thread(target=consumer, args=(q,))
+producer_thread.start()
+consumer_thread.start()
+
+# 主线程等待队列任务完成
+q.join()  
+print("主线程：所有任务完成")
+
+# 清理
+producer_thread.join()
+consumer_thread.join()
+```
+
+---
+
+### 四、时序图生成工具推荐
+1. **PlantUML**（文本化绘图，适合程序员）:  
+   - 在线工具: [PlantUML Editor](https://plantuml.com/zh/plantuml-online)
+   - VSCode 插件: [PlantUML Extension](https://marketplace.visualstudio.com/items?itemName=jebbs.plantuml)
+
+2. **draw.io**（图形化界面，拖拽操作）:  
+   - 在线地址: [draw.io](https://app.diagrams.net/)
+
+3. **Mermaid**（Markdown 友好）:  
+   - 语法示例:  
+     ```mermaid
+     sequenceDiagram
+         participant 主线程
+         participant 生产者线程
+         participant 队列
+         participant 消费者线程
+         主线程->>生产者线程: 启动
+         主线程->>消费者线程: 启动
+         生产者线程->>队列: put(data)
+         队列-->>消费者线程: 数据到达
+         消费者线程->>队列: get()
+     ```
+
+---
+
+### 五、多线程时序图设计要点
+1. **明确线程角色**：定义每个线程的职责（如生产者、消费者）。
+2. **标识同步点**：标注锁（`Lock`）、队列（`Queue`）等同步机制。
+3. **处理终止条件**：展示线程如何优雅退出（如发送 `None` 信号）。
+4. **区分阻塞/非阻塞**：用箭头类型区分操作是否阻塞（如 `->` vs `-->`）。
+
+通过时序图，可以直观验证多线程设计的合理性，避免死锁或竞争条件！
+
+# 画出这个代码的时序图
+```python
+counter = 0
+lock = threading.Lock()
+
+def increment():
+global counter
+for _ in range(100000):
+with lock:  # 自动获取和释放锁
+counter += 1
+
+t1 = threading.Thread(target=increment)
+t2 = threading.Thread(target=increment)
+
+t1.start()
+t2.start()
+t1.join()
+t2.join()
+
+打印(f"最终计数: {counter}")  # 正确结果为 200000
+
+```
+以下是针对该代码的时序图（使用 PlantUML 语法），展示两个线程通过锁（Lock）安全地修改共享计数器 `counter` 的流程：
+
+```plantuml
+@startuml
+title 多线程锁机制时序图（counter +=1）
+
+participant "主线程" as Main
+participant "线程t1" as T1
+participant "线程t2" as T2
+participant "锁Lock" as Lock
+
+Main -> T1: 创建并启动
+Main -> T2: 创建并启动
+activate T1
+activate T2
+
+loop 100000 次
+    T1 -> Lock: acquire()
+    activate Lock
+    Lock --> T1: 允许进入
+    T1 -> T1: counter +=1
+    T1 -> Lock: release()
+    deactivate Lock
+end
+
+loop 100000 次
+    T2 -> Lock: acquire()
+    activate Lock
+    Lock --> T2: 允许进入（等待T1释放后）
+    T2 -> T2: counter +=1
+    T2 -> Lock: release()
+    deactivate Lock
+end
+
+Main -> T1: join()
+Main -> T2: join()
+deactivate T1
+deactivate T2
+
+Main --> Main: print(counter=200000)
+@enduml
+```
+
+---
+
+### 时序图关键点解析：
+1. **线程启动**  
+   - 主线程创建并启动 t1 和 t2
+
+2. **锁的竞争**  
+   - 每次循环中，线程必须通过 `acquire()` 获得锁才能操作 counter
+   - 当 t1 持有锁时，t2 的 `acquire()` 会阻塞（图中未显式画阻塞，但通过 Lock 的响应顺序体现）
+
+3. **原子操作**  
+   - 锁保护的代码块 `counter +=1` 在时序上表现为不可分割的单元
+
+4. **交替执行**  
+   - 由于 GIL 的存在，线程会交替执行，但锁保证了同一时刻只有一个线程操作 counter
+
+---
+
+### 实际执行过程示意图（简化版）：
+```
+时间轴 | 线程t1               | 线程t2
+-------------------------------------------------
+  t0   | 获取锁               | 等待锁
+  t1   | counter +=1 → 1     | 阻塞
+  t2   | 释放锁               | 尝试获取锁
+  t3   |                     | 获取锁
+  t4   | 等待锁              | counter +=1 → 2
+  t5   |                     | 释放锁
+```
+
+---
+
+### 代码与时序图的对应关系：
+| 代码行为               | 时序图表现                          |
+|-----------------------|-----------------------------------|
+| `with lock:`          | acquire() → 操作 → release() 流程 |
+| `counter +=1`         | 线程内部的 self 操作               |
+| `t1.start()`/`t2.start()` | 主线程激活 t1 和 t2               |
+| `join()`               | 主线程等待子线程结束               |
+
+---
+
+### 可视化工具推荐：
+1. 复制上述 PlantUML 代码到在线渲染工具：[PlantUML 在线编辑器](https://www.plantuml.com/plantuml)
+2. 使用 VSCode 插件渲染（需安装 PlantUML 扩展）
+
+通过这个时序图可以清晰看到**锁如何强制串行化对共享资源的访问**，最终保证 counter 的正确性。
