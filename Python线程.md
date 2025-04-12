@@ -1291,6 +1291,170 @@ t_cons.join()
 
 ## 事件（`threading.Event`）详解
 
+以下是 **`threading.Event`** 的详细解析，结合时序图和代码示例说明其工作原理和使用场景。
+
+---
+
+### 一、`Event` 的核心作用
+`threading.Event` 是 Python 中用于**线程间简单信号通知**的同步原语，适用于以下场景：
+- **单向状态通知**：例如主线程通知子线程启动或停止。
+- **等待条件满足**：例如等待资源初始化完成后再执行操作。
+- **协调多个线程**：例如多个线程等待某个全局事件触发后继续执行。
+
+---
+
+### 二、`Event` 的主要方法
+| 方法                 | 说明                                                                 |
+|----------------------|--------------------------------------------------------------------|
+| **`set()`**          | 将事件标记为「已触发」，唤醒所有等待该事件的线程。                      |
+| **`clear()`**        | 重置事件为「未触发」状态。                                             |
+| **`wait(timeout=None)`** | 阻塞当前线程，直到事件被 `set()` 或超时（返回 `True` 表示事件已触发）。 |
+| **`is_set()`**       | 返回事件当前状态（`True` 表示已触发）。                                |
+
+---
+
+### 三、时序图（Mermaid 语法）
+```mermaid
+sequenceDiagram
+    participant 主线程 as Main
+    participant 等待线程 as Waiter
+    participant 触发线程 as Setter
+
+    Main->>Waiter: 启动线程
+    Main->>Setter: 启动线程
+
+    Waiter->>Event: wait() 阻塞
+    activate Event
+
+    Setter->>Event: set() 触发事件
+    Event-->>Waiter: 唤醒
+    deactivate Event
+
+    Waiter->>Waiter: 执行后续操作
+```
+
+---
+
+### 四、代码示例
+```python
+import threading
+import time
+
+# 创建事件对象
+event = threading.Event()
+
+def waiter():
+    print("[等待线程] 等待事件触发...")
+    event.wait()  # 阻塞直到事件被 set()
+    print("[等待线程] 事件已触发，继续执行")
+
+def setter():
+    time.sleep(2)
+    print("[触发线程] 设置事件")
+    event.set()  # 触发事件
+
+# 启动线程
+t_waiter = threading.Thread(target=waiter)
+t_setter = threading.Thread(target=setter)
+t_waiter.start()
+t_setter.start()
+
+# 等待线程结束
+t_waiter.join()
+t_setter.join()
+```
+
+**输出结果**：
+```
+[等待线程] 等待事件触发...
+[触发线程] 设置事件
+[等待线程] 事件已触发，继续执行
+```
+
+---
+
+### 五、关键特性详解
+#### 1. 事件的状态管理
+- **初始状态**：`is_set()` 返回 `False`。
+- **触发后状态**：调用 `set()` 后 `is_set()` 返回 `True`。
+- **重置事件**：调用 `clear()` 可将状态重置为 `False`。
+
+#### 2. 超时控制
+`wait(timeout=5)` 可设置最长等待时间：
+```python
+if event.wait(timeout=5):
+    print("事件已触发")
+else:
+    print("等待超时")
+```
+
+#### 3. 多次触发的影响
+- 多次调用 `set()` 不会产生副作用，事件保持触发状态。
+- 多次调用 `wait()` 在事件已触发后会立即返回 `True`。
+
+---
+
+### 六、典型应用场景
+#### 场景 1：等待资源初始化
+```python
+# 全局资源初始化完成事件
+resource_ready = threading.Event()
+
+def init_resource():
+    time.sleep(3)
+    print("资源初始化完成")
+    resource_ready.set()
+
+def use_resource():
+    resource_ready.wait()
+    print("使用资源")
+
+threading.Thread(target=init_resource).start()
+threading.Thread(target=use_resource).start()
+```
+
+#### 场景 2：协调多线程启动
+```python
+start_event = threading.Event()
+
+def worker():
+    start_event.wait()  # 等待统一启动信号
+    print("线程开始工作")
+
+# 创建多个线程
+threads = [threading.Thread(target=worker) for _ in range(3)]
+for t in threads:
+    t.start()
+
+time.sleep(2)
+print("主线程发出启动信号")
+start_event.set()  # 所有线程同时开始工作
+```
+
+---
+
+### 七、`Event` vs `Condition` vs `Semaphore`
+| 同步工具          | 适用场景                          | 特性                          |
+|------------------|---------------------------------|------------------------------|
+| **`Event`**      | 简单的一次性状态通知               | 轻量级，单向触发               |
+| **`Condition`**  | 复杂的条件等待和通知（如缓冲区管理） | 支持多条件，需配合锁使用        |
+| **`Semaphore`**  | 控制并发访问资源的线程数量          | 计数器机制，限制并发数          |
+
+---
+
+### 八、注意事项
+1. **不要滥用 `Event`**：对于复杂协调逻辑（如多条件依赖），优先使用 `Condition`。
+2. **线程安全**：`Event` 的方法本身是线程安全的，无需额外加锁。
+3. **避免死锁**：确保至少有一个线程会调用 `set()`，否则 `wait()` 会永久阻塞。
+4. **重置事件**：若需要重复使用事件，调用 `clear()` 后再次 `wait()`。
+
+---
+
+### 总结
+`threading.Event` 是 Python 多线程编程中实现**简单信号通知**的高效工具，通过 `set()` 和 `wait()` 的配合，可以轻松实现线程间的启动协调、条件等待等功能。对于更复杂的场景，可结合 `Condition` 或 `Semaphore` 使用。
+
+
+
 ## 条件变量（threading.Condition）
 
 ## 信号量（threading.Semaphore）
