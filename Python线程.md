@@ -1457,6 +1457,210 @@ start_event.set()  # 所有线程同时开始工作
 
 ## 条件变量（threading.Condition）
 
+以下是 **`threading.Condition`** 的详细解析，结合时序图和代码示例，说明其复杂线程同步场景下的工作原理。
+
+---
+
+### 一、`Condition` 的核心作用
+`threading.Condition` 是 Python 中用于**多线程间复杂条件协调**的同步原语，结合了锁（`Lock`/`RLock`）和条件检查机制。它适用于以下场景：
+- **生产者-消费者模型**：缓冲区满时阻塞生产者，空时阻塞消费者。
+- **多条件依赖**：线程需要等待多个条件满足后才能执行。
+- **精准唤醒**：通过 `notify()` 或 `notify_all()` 控制唤醒特定线程。
+
+---
+
+### 二、`Condition` 的主要方法
+| 方法                      | 说明                                                                 |
+|---------------------------|--------------------------------------------------------------------|
+| **`acquire()`**           | 获取底层锁（与 `Lock` 的 `acquire()` 相同）。                       |
+| **`release()`**           | 释放底层锁（与 `Lock` 的 `release()` 相同）。                       |
+| **`wait(timeout=None)`**  | 释放锁并阻塞，直到被 `notify()` 唤醒或超时。唤醒后重新获取锁。       |
+| **`notify(n=1)`**         | 唤醒至多 `n` 个等待该条件的线程（需先获取锁）。                      |
+| **`notify_all()`**        | 唤醒所有等待该条件的线程（需先获取锁）。                            |
+
+---
+
+### 三、时序图（生产者-消费者模型）
+```mermaid
+sequenceDiagram
+    participant 生产者 as Producer
+    participant 条件变量 as Condition
+    participant 消费者 as Consumer
+
+    loop 生产数据
+        Producer->>Condition: acquire()
+        Condition->>Producer: 允许进入
+        Producer->>Condition: 检查缓冲区是否满
+        alt 未满
+            Producer->>Producer: 添加数据到缓冲区
+            Producer->>Condition: notify_all()
+        else 已满
+            Producer->>Condition: wait()
+            Condition-->>Producer: 唤醒后重新检查
+        end
+        Producer->>Condition: release()
+    end
+
+    loop 消费数据
+        Consumer->>Condition: acquire()
+        Condition->>Consumer: 允许进入
+        Consumer->>Condition: 检查缓冲区是否空
+        alt 未空
+            Consumer->>Consumer: 取出数据
+            Consumer->>Condition: notify_all()
+        else 已空
+            Consumer->>Condition: wait()
+            Condition-->>Consumer: 唤醒后重新检查
+        end
+        Consumer->>Condition: release()
+    end
+```
+
+---
+
+### 四、代码示例（缓冲区管理）
+```python
+import threading
+import time
+
+# 共享缓冲区及条件变量
+buffer = []
+BUFFER_MAX = 5
+condition = threading.Condition()
+
+def producer():
+    for i in range(10):
+        with condition:  # 自动获取和释放锁
+            # 缓冲区满时等待
+            while len(buffer) >= BUFFER_MAX:
+                print("缓冲区满，生产者等待...")
+                condition.wait()
+            buffer.append(i)
+            print(f"生产者添加: {i}")
+            condition.notify_all()  # 通知消费者
+        time.sleep(0.1)
+
+def consumer():
+    while True:
+        with condition:
+            # 缓冲区空时等待
+            while len(buffer) == 0:
+                print("缓冲区空，消费者等待...")
+                condition.wait()
+            item = buffer.pop(0)
+            print(f"消费者取出: {item}")
+            condition.notify_all()  # 通知生产者
+        # 模拟耗时操作
+        time.sleep(0.2)
+        if item == 9:  # 终止条件（根据业务逻辑调整）
+            break
+
+# 启动线程
+t_prod = threading.Thread(target=producer)
+t_cons = threading.Thread(target=consumer)
+t_prod.start()
+t_cons.start()
+
+# 等待线程结束
+t_prod.join()
+t_cons.join()
+print("所有任务完成")
+```
+
+---
+
+### 五、关键机制详解
+#### 1. `wait()` 的内部流程
+- **步骤 1**：调用 `wait()` 时，自动释放锁，允许其他线程操作共享资源。
+- **步骤 2**：线程进入阻塞状态，直到被 `notify()` 唤醒或超时。
+- **步骤 3**：唤醒后重新获取锁，继续执行后续代码。
+
+#### 2. 条件检查必须使用 `while` 而非 `if`
+```python
+# 正确写法（防止虚假唤醒）
+while condition_not_met:
+    cond.wait()
+
+# 错误写法（可能因虚假唤醒导致条件不满足时继续执行）
+if condition_not_met:
+    cond.wait()
+```
+
+#### 3. `notify()` 与 `notify_all()` 的选择
+- **`notify()`**：唤醒一个等待线程，适用于单消费者/单生产者场景。
+- **`notify_all()`**：唤醒所有等待线程，适用于多消费者/多生产者场景。
+
+---
+
+### 六、典型应用场景
+#### 场景 1：多线程任务调度
+```python
+# 控制线程按顺序执行
+cond = threading.Condition()
+current_step = 1
+
+def worker(step):
+    with cond:
+        while current_step != step:
+            cond.wait()
+        print(f"执行步骤 {step}")
+        current_step += 1
+        cond.notify_all()
+
+# 启动多个线程按顺序执行
+threads = [threading.Thread(target=worker, args=(i,)) for i in range(1, 4)]
+for t in threads:
+    t.start()
+```
+
+#### 场景 2：有限资源池管理
+```python
+class ConnectionPool:
+    def __init__(self, max_connections):
+        self.max_connections = max_connections
+        self.connections = []
+        self.cond = threading.Condition()
+
+    def get_connection(self):
+        with self.cond:
+            while len(self.connections) >= self.max_connections:
+                self.cond.wait()
+            conn = self._create_connection()
+            self.connections.append(conn)
+            return conn
+
+    def release_connection(self, conn):
+        with self.cond:
+            self.connections.remove(conn)
+            self.cond.notify()
+```
+
+---
+
+### 七、`Condition` 与 `Event` 的对比
+| 特性                | `Condition`                     | `Event`                     |
+|---------------------|---------------------------------|-----------------------------|
+| **同步粒度**        | 精细（可绑定多个条件）          | 粗粒度（单一布尔状态）       |
+| **锁机制**          | 必须配合锁使用                  | 无需显式锁                  |
+| **唤醒控制**        | 支持精准唤醒（`notify(n)`）     | 只能广播唤醒（`set()`）      |
+| **适用场景**        | 复杂条件协调（如缓冲区管理）    | 简单状态通知（如启动信号）   |
+
+---
+
+### 八、注意事项
+1. **始终在循环中检查条件**：防止虚假唤醒（即使未被 `notify()` 也可能返回）。
+2. **先获取锁再操作共享资源**：避免竞态条件。
+3. **合理选择通知方式**：`notify_all()` 可能引发“惊群效应”，需根据场景权衡。
+4. **避免嵌套锁**：确保锁的获取和释放严格配对。
+
+---
+
+### 总结
+`threading.Condition` 是处理复杂线程同步问题的利器，通过条件检查和精准通知机制，可高效实现生产者-消费者、资源池管理等场景。使用时需牢记**“获取锁 → 检查条件 → 等待或操作 → 释放锁”**的标准流程，并始终用 `while` 循环保护条件检查。
+
+
+
+
 ## 信号量（threading.Semaphore）
 
 ## 线程安全容器
